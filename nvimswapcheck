@@ -1,0 +1,184 @@
+#!/usr/bin/env node
+
+const child_process = require('child_process');
+const path = require('path');
+const util = require('util');
+
+const _ = require('lodash');
+const Promise = require('bluebird');
+
+
+const flagsRE = /^-([hmMrRoO]+)$/;
+const swapfileRE = /^\s+In directory (.+):$|^\d+\.\s+(.+?)[\r\n]{1,2}\s+owned by:\s+(.+?)\s+dated:\s+(.+?)[\r\n]{1,2}\s+file name:\s+(.+?)[\r\n]{1,2}\s+modified:\s+(.+?)[\r\n]{1,2}\s+user name:\s+(.+?)\s+host name:\s+(.+?)[\r\n]{1,2}\s+process ID:\s+(.+?)$/gm;
+const stillRunningRE = /^(\d+) \(still running\)\s*$/;
+
+
+function err(...args) {
+    console.error('\x1b[90m%s\x1b[m', util.format(...args));
+    process.exit(1);
+}
+
+function run(command) {
+    return new Promise((resolve, reject) =>
+        child_process.exec(command, (error, stdout, stderr) => {
+            if(error) {
+                error.stdout = stdout;
+                error.stderr = stderr;
+                reject(error);
+            }
+
+            resolve({ stdout, stderr });
+        })
+    );
+}
+
+function ins(val) {
+    return util.inspect(val, { colors: true });
+}
+
+const csiReset = '\x1b[m';
+
+function sgr(...colorNums) {
+    var csiCode = util.format('\x1b[%sm', colorNums.join(';'))
+    function color_(...args) {
+        return [csiCode, util.format(...args), csiReset].join('');
+    }
+    color_.toString = (() => csiCode);
+    return color_;
+}
+
+var c = {
+    reset: csiReset,
+
+    bold: sgr(1),
+
+    black: sgr(30),
+    red: sgr(31),
+    green: sgr(32),
+    yellow: sgr(33),
+    blue: sgr(34),
+    magenta: sgr(35),
+    cyan: sgr(36),
+    white: sgr(37),
+
+    gray: sgr(90),
+    grey: sgr(90),
+
+    bright: {
+        red: sgr(91),
+        green: sgr(92),
+        yellow: sgr(93),
+        blue: sgr(94),
+        magenta: sgr(95),
+        cyan: sgr(96),
+        white: sgr(97),
+    },
+};
+
+
+var filters = [];
+var options = {
+    onlyFilenames: false
+};
+
+var args = process.argv.slice(2);
+while(args.length > 0) {
+    let arg = args.shift();
+    let match;
+    if((match = flagsRE.exec(arg)) !== null) {
+        _.forEach(match[1], flag => {
+            switch(flag) {
+                case 'h':
+                    let executable = path.basename(process.argv[1]);
+                    console.log(`Usage: ${executable} [OPTIONS]
+
+Options:
+ -h    Show this help message, and exit
+ -m    Only match modified files
+ -M    Only match unmodified files
+ -r    Only match files owned by running instances of nvim
+ -R    Only match files owned by dead instances of nvim
+ -o    Only display filenames
+ -O    Show detailed file information`);
+                    process.exit(1);
+                    break;
+                case 'm':
+                    filters.push({ modified: true });
+                    break;
+                case 'r':
+                    filters.push({ running: true });
+                    break;
+                case 'M':
+                    filters.push({ modified: false });
+                    break;
+                case 'R':
+                    filters.push({ running: false });
+                    break;
+                case 'o':
+                    options.onlyFilenames = true;
+                    break;
+                case 'O':
+                    options.onlyFilenames = false;
+                    break;
+                default:
+                    err('Unrecognized flag: %s', ins(flag));
+            }
+        });
+    } else {
+        err('Unrecognized argument: %s', ins(arg));
+    }
+}
+
+run('nvim -r')
+    .catch(error => {
+        err('Got error from `nvim -r`: %s', error.stack || error);
+    })
+    .then(nvimR => {
+        var swapFiles = [];
+        var match, swapDir;
+        while((match = swapfileRE.exec(nvimR.stderr)) !== null) {
+            if(match[1]) {
+                swapDir = match[1];
+            } else {
+                let [swapFile, owner, timestamp, file, modified, userName, hostName, pid] = match.slice(2);
+
+                modified = modified.toLowerCase() == 'yes';
+
+                let running = false;
+                if((match = stillRunningRE.exec(pid)) !== null) {
+                    pid = match[1];
+                    running = true;
+                }
+
+                swapFiles.push({ swapDir, swapFile, owner, timestamp, file, modified, userName, hostName, pid, running });
+            }
+        }
+        return swapFiles;
+    }
+)
+    .filter(_.overEvery(filters))
+    .tap(swapFiles => {
+        if(!options.onlyFilenames) {
+            console.log(c.bold('Found %s matching swapfile%s:',
+                swapFiles.length, swapFiles.length == 1 ? '' : 's'));
+        }
+    })
+    .map(({ swapDir, swapFile, owner, timestamp, file, modified, userName, hostName, pid, running }) => {
+        var runningColor = running ? c.green : c.gray;
+        if(options.onlyFilenames) {
+            console.log(swapDir.replace(/^~/, process.env.HOME) + '/' + swapFile);
+        } else {
+            console.log(`
+${c.cyan(swapDir + '/')}${c.bold(c.cyan(swapFile))} ${c.gray('(owner: %s; timestamp: %s)', owner, timestamp)}
+  File: ${c.bright.yellow(file)} ${modified ? c.bold(c.red('(modified)')) : c.gray('(not modified)')}
+  Written by: ${c.cyan(userName)}${c.gray('@')}${c.blue(hostName)}
+  Process ID: ${c.bold(runningColor(pid))} ${runningColor(running ? '(running)' : '(not running)')}`);
+        }
+    })
+    /*
+    .then(swapFiles => {
+        console.dir(swapFiles, { colors: true });
+    });
+    */
+
+// vim: ft=javascript :

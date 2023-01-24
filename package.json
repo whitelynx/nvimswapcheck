@@ -1,0 +1,15 @@
+{
+  "name": "nvimswapcheck",
+  "version": "1.0.0",
+  "description": "",
+  "main": "nvimswapcheck",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "David H. Bronke <whitelynx@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "bluebird": "^3.4.3",
+    "lodash": "^4.15.0"
+  }
+}
